@@ -1,0 +1,5 @@
+{
+  "incident_id": "inc-redis-memory-001",
+  "expected_root_cause": "Redis memory pressure causing evictions and elevated API latency on session-cache.",
+  "expected_mitigation": "Trim bounded streams, enforce retention on hot keys, scale Redis capacity"
+}

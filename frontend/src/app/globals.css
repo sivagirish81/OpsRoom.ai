@@ -1,0 +1,19 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  @apply bg-war-bg text-slate-100 antialiased;
+}
+
+.card {
+  @apply rounded-xl border border-war-border bg-war-panel/80 backdrop-blur;
+}
+
+.badge {
+  @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium;
+}

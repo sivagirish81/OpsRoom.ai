@@ -1,0 +1,11 @@
+[
+  {
+    "id": "kafka-lag-001",
+    "incident_id": "inc-kafka-lag-001",
+    "prompt": "Analyze the Kafka lag incident with schema deserialization errors after checkout-consumer v2 deploy.",
+    "expected_root_cause": "checkout-consumer v2 introduced a schema/deserialization compatibility bug, causing Kafka messages to fail processing and consumer lag to grow.",
+    "expected_mitigation": "Rollback checkout-consumer v2, pause risky producer rollout if needed, and verify schema compatibility before redeploy.",
+    "expected_evidence_keywords": ["deserial", "schema", "checkout-consumer", "v2", "lag"],
+    "requires_human_approval": true
+  }
+]

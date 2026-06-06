@@ -1,0 +1,51 @@
+services:
+  redis:
+    image: redis/redis-stack:latest
+    ports:
+      - "6379:6379"
+      - "8001:8001"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      FRONTEND_ORIGIN: http://localhost:3000
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      WANDB_API_KEY: ${WANDB_API_KEY:-}
+      WEAVE_PROJECT: ${WEAVE_PROJECT:-opsroom-ai}
+      WEAVE_DISABLED: ${WEAVE_DISABLED:-false}
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app/backend
+      - ./samples:/app/samples
+    command: uvicorn backend.app:app --host 0.0.0.0 --port 8000 --reload
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      OPSROOM_BACKEND_URL: http://backend:8000
+      NEXT_PUBLIC_OPSROOM_API_URL: http://localhost:8000
+    depends_on:
+      - backend
+
+volumes:
+  redis-data:
