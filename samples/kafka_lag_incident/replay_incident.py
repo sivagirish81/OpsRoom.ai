@@ -25,8 +25,21 @@ def emit(stream: str, delay: float, **event: object) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Replay the OpsRoom.ai Kafka lag incident.")
     parser.add_argument("--delay", type=float, default=1.2, help="Seconds between event batches.")
+    parser.add_argument(
+        "--chaos",
+        action="store_true",
+        help="Fast ~30s demo replay (delay=0.3, visible lag spikes for judges).",
+    )
     parser.add_argument("--reset", action="store_true", help="Clear the previous demo incident.")
     args = parser.parse_args()
+
+    if args.chaos:
+        args.delay = 0.3
+        metric_pause = 0.08
+        log_pause = args.delay / 2
+    else:
+        metric_pause = 0.05
+        log_pause = args.delay / 2
 
     client = get_redis()
     if args.reset:
@@ -70,7 +83,7 @@ def main() -> None:
         ):
             emit(
                 METRICS,
-                0.05,
+                metric_pause,
                 service="checkout-consumer",
                 metric=metric,
                 value=value,
@@ -81,7 +94,7 @@ def main() -> None:
     for partition in range(6):
         emit(
             LOGS,
-            args.delay / 2,
+            log_pause,
             service="checkout-consumer",
             level="ERROR",
             message=(
@@ -90,7 +103,10 @@ def main() -> None:
                 f"partition={partition % 3}"
             ),
         )
-    print("Replay complete. The backend stream consumer is coordinating the agent workflow.")
+    print(
+        "Replay complete. The backend stream consumer is coordinating the agent workflow."
+        + (" (chaos mode — fast demo replay)" if args.chaos else "")
+    )
 
 
 if __name__ == "__main__":

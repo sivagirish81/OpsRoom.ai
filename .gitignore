@@ -17,6 +17,7 @@ credentials.json
 secrets/
 frontend/.next/
 frontend/node_modules/
+.demo-logs/
 *.egg-info/
 .eggs/
 coverage.xml

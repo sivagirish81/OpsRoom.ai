@@ -46,7 +46,57 @@ flowchart LR
 - Optional: OpenAI-compatible API key (fallback logic works without it)
 - Optional: `wandb login` or `WANDB_API_KEY` for Weave traces
 
-## Quick start (local, recommended for judges)
+## One-command demo (recommended for judges)
+
+```bash
+cp .env.example .env   # optional: add OPENAI_API_KEY + WANDB_API_KEY
+make demo
+```
+
+This will:
+1. Start Redis via Docker
+2. Install Python deps and seed the Kafka lag incident
+3. Launch backend (`:8000`) and frontend (`:3000`)
+4. Run **chaos replay** (`--delay 0.3`) so lag spikes visibly on screen
+
+Stop everything:
+
+```bash
+make demo-stop
+```
+
+Re-run only the fast replay (backend + frontend already running):
+
+```bash
+make chaos
+```
+
+## Split-screen demo layout (UI + Weave)
+
+For the strongest live demo, use **two windows side-by-side**:
+
+```
+┌─────────────────────────────┬─────────────────────────────┐
+│  http://localhost:3000      │  W&B Weave (from /health)   │
+│  ─────────────────────────  │  ─────────────────────────  │
+│  • Incident list            │  • run_incident_workflow    │
+│  • Live timeline  [LIVE]    │  • root_cause_agent         │
+│  • Hypotheses + evidence    │  • search_runbooks          │
+│  • Approve rollback         │  • mitigation_agent       │
+└─────────────────────────────┴─────────────────────────────┘
+```
+
+The war room UI now includes a **Timeline | Weave** split panel with a clickable trace URL (from `GET /health`).
+
+**macOS tip:** Full-screen the browser on the left; open Weave in a second window snapped to the right (`Window → Tile Window to Left/Right of Screen`).
+
+Get the Weave URL anytime:
+
+```bash
+curl -s http://localhost:8000/health | python3 -m json.tool
+```
+
+## Quick start (manual steps)
 
 ### 1. Environment
 
@@ -93,8 +143,10 @@ Open **http://localhost:3000**
 
 ```bash
 source .venv/bin/activate
-python -m samples.kafka_lag_incident.replay_incident --reset
+python -m samples.kafka_lag_incident.replay_incident --reset --chaos
 ```
+
+Or: `make chaos` — uses `--delay 0.3` for a ~30-second visible lag spike.
 
 Watch the UI populate as events stream in. The backend worker auto-triggers the LangGraph workflow when alerts arrive.
 
@@ -123,14 +175,14 @@ python -m samples.kafka_lag_incident.replay_incident --reset
 
 ## 3-minute judge demo script
 
-1. **Show Redis war room** — mention Streams, priority sorted set, vector runbooks, locks.
-2. **Run replay** — `python -m samples.kafka_lag_incident.replay_incident --reset`
-3. **UI** — SEV1 Kafka lag incident appears, agents progress through cards.
-4. **Root cause** — hypothesis: bad `checkout-consumer v2` schema/deserialization deploy.
-5. **Human approval** — click **Approve rollback** (writes action event to Redis, status → `mitigated`).
-6. **Copilot chat** — ask: “What is the most likely root cause?” or “Show me the evidence.”
-7. **Weave** — open https://wandb.ai → Weave → project `opsroom-ai` → show multi-agent trace.
-8. **Eval** — run scoring script (below).
+1. Run **`make demo`** (or have it already running).
+2. **Split screen** — war room left, Weave trace tab right (click link in Timeline | Weave panel).
+3. **Watch chaos replay** — lag climbs 0 → 1M, agents progress, timeline shows `LIVE`.
+4. **Root cause** — evidence bullets cite metrics, logs, deploy from Redis.
+5. **Human approval** — click **Approve rollback**.
+6. **Copilot** — “What is the most likely root cause?”
+7. **Weave** — expand `run_incident_workflow` trace, show hypotheses + confidence.
+8. **Eval** — `python -m evals.evaluate_incident_agent --seed`
 
 ## Weave tracing
 
@@ -147,21 +199,39 @@ Disable tracing locally with `WEAVE_DISABLED=true`.
 
 ## Evaluation
 
+Runs scored eval suites in **Weave Evaluations** (Traces + **Evals** tab):
+
 ```bash
 source .venv/bin/activate
-python -m evals.evaluate_incident_agent --seed
+python -m evals.evaluate_incident_agent --seed              # incident agents + copilot routing
+python -m evals.evaluate_incident_agent --seed --suite incident
+python -m evals.evaluate_incident_agent --suite copilot       # no Redis / LLM required
 ```
 
-Scoring functions:
+### Incident agent scorers
 
 | Scorer | Checks |
 |---|---|
-| `root_cause_contains_schema_error` | Root cause mentions schema/deserialization/checkout-consumer v2 |
-| `mitigation_requires_human_approval` | Rollback recommended + status `awaiting_approval` |
-| `cites_evidence_from_logs` | Evidence keywords from logs/metrics/deploys |
+| `root_cause_contains_keywords` | Root cause mentions scenario keywords |
+| `mitigation_requires_human_approval` | Rollback recommended + status `awaiting_approval` (Kafka) |
+| `cites_evidence_from_logs` | Evidence keywords from logs/metrics/deploys/hypotheses |
 | `uses_recent_deploy_signal` | Deploy findings correlate with root cause |
+| `hypothesis_confidence_alignment` | Top hypothesis confidence within ±15% of verdict |
+| `top_hypothesis_has_smoking_gun` | Rank #1 hypothesis cites schema or memory proof |
+| `log_findings_include_pattern` | Logs agent tagged expected error pattern |
 
-Dataset: `evals/incident_eval_dataset.json`
+### Copilot routing scorers
+
+| Scorer | Checks |
+|---|---|
+| `copilot_panel_routing_accuracy` | Question opens the expected generative panel(s) |
+| `copilot_single_panel_rule` | At most one panel unless dashboard requested |
+| `copilot_metric_filter_accuracy` | Metric filter includes expected series |
+
+Datasets:
+
+- `evals/incident_eval_dataset.json` — Kafka schema + Redis memory scenarios
+- `evals/copilot_eval_dataset.json` — generative UI routing prompts
 
 Expected outcome reference: `samples/kafka_lag_incident/expected_outcome.json`
 
@@ -191,9 +261,12 @@ pytest tests/ -v
 ```
 backend/           FastAPI app, Redis helpers, LangGraph agents
 frontend/          Next.js + CopilotKit Generative UI
+scripts/           demo.sh, demo-stop.sh
 samples/kafka_lag_incident/   Demo seed + replay scripts + runbooks
+samples/redis_memory_incident/  Second demo scenario
 evals/             Weave evaluation script + dataset
 tests/             Priority + state transition tests
+Makefile           make demo | make chaos | make demo-stop
 ```
 
 ## Copilot prompts to try

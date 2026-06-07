@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.config import get_settings
 from backend.copilotkit_endpoint import opsroom_chat_agent
 from backend.graph import run_incident_workflow
+from backend.incident_demo import inject_deep_log_scan
 from backend.observability import initialize_weave, weave_ui_url
 from backend.redis_client import redis_healthcheck
 from backend.state import get_incident, list_incidents, update_incident
@@ -121,25 +122,10 @@ def approval(incident_id: str, approved: bool) -> dict[str, Any]:
 def deeper_log_analysis(incident_id: str) -> dict[str, Any]:
     if not get_incident(incident_id):
         raise HTTPException(status_code=404, detail="Incident not found")
-    add_stream_event(
-        LOGS,
-        {
-            "incident_id": incident_id,
-            "service": "checkout-consumer",
-            "level": "ERROR",
-            "message": (
-                "Deep scan: AvroTypeException schema fingerprint mismatch; "
-                "writer schema checkout.v3 is incompatible with reader checkout.v2"
-            ),
-        },
-    )
-    append_timeline(
-        incident_id,
-        "human",
-        "analysis_requested",
-        "Human requested deeper log analysis.",
-    )
-    return run_incident_workflow(incident_id, "Perform deeper log analysis")
+    try:
+        return inject_deep_log_scan(incident_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.post("/api/incidents/{incident_id}/explain-hypothesis")

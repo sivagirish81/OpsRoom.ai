@@ -37,6 +37,12 @@ export type TimelineEvent = {
   data?: Record<string, unknown>;
 };
 
+export type HealthResponse = {
+  status: string;
+  redis: boolean;
+  weave: string | null;
+};
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_URL}${path}`, {
     ...init,
@@ -53,6 +59,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  health: () => request<HealthResponse>("/health"),
   incidents: () => request<Incident[]>("/api/incidents"),
   incident: (id: string) => request<Incident>(`/api/incidents/${id}`),
   timeline: (id: string) => request<TimelineEvent[]>(`/api/incidents/${id}/timeline`),

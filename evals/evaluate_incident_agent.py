@@ -1,124 +1,197 @@
 #!/usr/bin/env python3
-"""Weave evaluation for OpsRoom incident response agents."""
+"""Run OpsRoom agent evals in Weave Evaluations (Traces + Evals tab)."""
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 from pathlib import Path
 from typing import Any
 
 import weave
 
+from backend.copilot_routing import keyword_route_panels
 from backend.graph import run_incident_workflow
 from backend.observability import initialize_weave, weave_ui_url
-from backend.state import get_incident
-from samples.kafka_lag_incident.seed_redis import main as seed_redis
+from evals.copilot_scorers import (
+    copilot_metric_filter_accuracy,
+    copilot_panel_routing_accuracy,
+    copilot_single_panel_rule,
+)
+from evals.scorers import (
+    cites_evidence_from_logs,
+    hypothesis_confidence_alignment,
+    log_findings_include_pattern,
+    mitigation_requires_human_approval,
+    root_cause_contains_keywords,
+    top_hypothesis_has_smoking_gun,
+    uses_recent_deploy_signal,
+)
+from evals.seed import seed_incident
 
-DATASET_PATH = Path(__file__).resolve().parent / "incident_eval_dataset.json"
+INCIDENT_DATASET_PATH = Path(__file__).resolve().parent / "incident_eval_dataset.json"
+COPILOT_DATASET_PATH = Path(__file__).resolve().parent / "copilot_eval_dataset.json"
+
+INCIDENT_SCORERS = [
+    root_cause_contains_keywords,
+    mitigation_requires_human_approval,
+    cites_evidence_from_logs,
+    uses_recent_deploy_signal,
+    hypothesis_confidence_alignment,
+    top_hypothesis_has_smoking_gun,
+    log_findings_include_pattern,
+]
+
+COPILOT_SCORERS = [
+    copilot_panel_routing_accuracy,
+    copilot_single_panel_rule,
+    copilot_metric_filter_accuracy,
+]
+
+_SEED_EACH_CASE = False
 
 
-def _contains_any(text: str, needles: list[str]) -> bool:
-    lowered = text.lower()
-    return any(needle.lower() in lowered for needle in needles)
+def _load_dataset(path: Path) -> list[dict[str, Any]]:
+    return json.loads(path.read_text())
+
+
+def _average_score(summary: dict[str, Any]) -> float | None:
+    scorer_means: list[float] = []
+    skip_keys = {"output", "model_latency"}
+    for name, payload in summary.items():
+        if name in skip_keys or not isinstance(payload, dict):
+            continue
+        score_block = payload.get("score")
+        if isinstance(score_block, dict) and isinstance(score_block.get("mean"), (int, float)):
+            scorer_means.append(float(score_block["mean"]))
+        elif isinstance(score_block, (int, float)):
+            scorer_means.append(float(score_block))
+    if not scorer_means:
+        return None
+    return sum(scorer_means) / len(scorer_means)
+
+
+def _print_summary(title: str, summary: dict[str, Any]) -> None:
+    print(f"\n{title}\n" + "-" * len(title))
+    print(json.dumps(summary, indent=2, default=str))
+    average = _average_score(summary)
+    if average is not None:
+        print(f"\nAverage score: {average:.2f}")
 
 
 @weave.op()
-def root_cause_contains_schema_error(output: dict[str, Any], expected: dict[str, Any]) -> dict[str, Any]:
-    root_cause = str(output.get("suspected_root_cause", ""))
-    expected_text = str(expected.get("expected_root_cause", ""))
-    keywords = ["schema", "deserial", "checkout-consumer", "v2"]
-    score = 1.0 if _contains_any(root_cause, keywords) else 0.0
-    return {"score": score, "root_cause": root_cause, "expected": expected_text}
+def predict_incident_case(incident_id: str, prompt: str = "") -> dict[str, Any]:
+    if _SEED_EACH_CASE:
+        seed_incident(incident_id)
+    return run_incident_workflow(incident_id, prompt)
 
 
 @weave.op()
-def mitigation_requires_human_approval(output: dict[str, Any], expected: dict[str, Any]) -> dict[str, Any]:
-    status = str(output.get("status", ""))
-    action = str(output.get("recommended_action", ""))
-    requires = bool(expected.get("requires_human_approval", True))
-    rollback = "rollback" in action.lower()
-    awaiting = status == "awaiting_approval"
-    score = 1.0 if requires and rollback and awaiting else 0.0
-    return {"score": score, "status": status, "recommended_action": action}
+def predict_copilot_routing(question: str) -> dict[str, Any]:
+    return keyword_route_panels(question)
 
 
-@weave.op()
-def cites_evidence_from_logs(output: dict[str, Any], expected: dict[str, Any]) -> dict[str, Any]:
-    keywords = expected.get("expected_evidence_keywords", [])
-    evidence_sources = [
-        str(output.get("suspected_root_cause", "")),
-        json.dumps(output.get("log_findings", [])),
-        json.dumps(output.get("commander_summary", {})),
-        json.dumps(output.get("hypotheses", [])),
-    ]
-    combined = " ".join(evidence_sources).lower()
-    hits = sum(1 for keyword in keywords if keyword.lower() in combined)
-    score = 1.0 if hits >= min(3, len(keywords)) else hits / max(len(keywords), 1)
-    return {"score": score, "keyword_hits": hits, "keywords": keywords}
+async def run_incident_evaluation(
+    dataset: list[dict[str, Any]],
+    *,
+    evaluation_name: str,
+) -> dict[str, Any]:
+    evaluation = weave.Evaluation(
+        dataset=dataset,
+        scorers=INCIDENT_SCORERS,
+        evaluation_name=evaluation_name,
+    )
+    return await evaluation.evaluate(predict_incident_case)
 
 
-@weave.op()
-def uses_recent_deploy_signal(output: dict[str, Any], _: dict[str, Any]) -> dict[str, Any]:
-    deploys = output.get("deploy_findings", [])
-    root_cause = str(output.get("suspected_root_cause", "")).lower()
-    deploy_hit = any("v2" in str(item.get("version", "")).lower() for item in deploys)
-    text_hit = "deploy" in root_cause or "v2" in root_cause
-    score = 1.0 if deploy_hit and text_hit else 0.5 if deploy_hit or text_hit else 0.0
-    return {"score": score, "deploy_findings": deploys}
+async def run_copilot_evaluation(
+    dataset: list[dict[str, Any]],
+    *,
+    evaluation_name: str,
+) -> dict[str, Any]:
+    evaluation = weave.Evaluation(
+        dataset=dataset,
+        scorers=COPILOT_SCORERS,
+        evaluation_name=evaluation_name,
+    )
+    return await evaluation.evaluate(predict_copilot_routing)
 
 
-@weave.op()
-def run_eval_case(case: dict[str, Any]) -> dict[str, Any]:
-    incident_id = case["incident_id"]
-    output = run_incident_workflow(incident_id, case.get("prompt", ""))
-    return {
-        "incident_id": incident_id,
-        "output": output,
-        "scores": {
-            "root_cause_contains_schema_error": root_cause_contains_schema_error(output, case),
-            "mitigation_requires_human_approval": mitigation_requires_human_approval(output, case),
-            "cites_evidence_from_logs": cites_evidence_from_logs(output, case),
-            "uses_recent_deploy_signal": uses_recent_deploy_signal(output, case),
-        },
-    }
+async def run_all_evaluations(
+    *,
+    incident_dataset_path: Path,
+    copilot_dataset_path: Path,
+    run_incident: bool,
+    run_copilot: bool,
+    seed_before_each_case: bool,
+    evaluation_name: str,
+) -> dict[str, dict[str, Any]]:
+    global _SEED_EACH_CASE
+    _SEED_EACH_CASE = seed_before_each_case
+
+    results: dict[str, dict[str, Any]] = {}
+    if run_incident:
+        incident_dataset = _load_dataset(incident_dataset_path)
+        results["incident"] = await run_incident_evaluation(
+            incident_dataset,
+            evaluation_name=f"{evaluation_name}-incident-agents",
+        )
+    if run_copilot:
+        copilot_dataset = _load_dataset(copilot_dataset_path)
+        results["copilot"] = await run_copilot_evaluation(
+            copilot_dataset,
+            evaluation_name=f"{evaluation_name}-copilot-routing",
+        )
+    return results
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Evaluate OpsRoom incident agents with Weave.")
-    parser.add_argument("--seed", action="store_true", help="Seed Redis before running evals.")
-    parser.add_argument("--dataset", default=str(DATASET_PATH), help="Path to eval dataset JSON.")
+    parser = argparse.ArgumentParser(description="Evaluate OpsRoom agents with Weave Evaluations.")
+    parser.add_argument("--seed", action="store_true", help="Seed Redis before each incident case.")
+    parser.add_argument("--incident-dataset", default=str(INCIDENT_DATASET_PATH))
+    parser.add_argument("--copilot-dataset", default=str(COPILOT_DATASET_PATH))
+    parser.add_argument(
+        "--suite",
+        choices=("all", "incident", "copilot"),
+        default="all",
+        help="Which evaluation suite to run.",
+    )
+    parser.add_argument(
+        "--evaluation-name",
+        default="opsroom-eval",
+        help="Prefix for Weave evaluation runs (shows in Evals tab).",
+    )
     args = parser.parse_args()
 
     initialize_weave()
-    if args.seed:
-        seed_redis()
-
-    dataset = json.loads(Path(args.dataset).read_text())
-    results = [run_eval_case(case) for case in dataset]
-
-    print("\nOpsRoom.ai incident agent evaluation\n" + "=" * 40)
     weave_url = weave_ui_url()
-    if weave_url:
-        print(f"Weave traces: {weave_url}")
-    for result in results:
-        print(f"\nIncident: {result['incident_id']}")
-        output = result["output"]
-        print(f"  Root cause: {output.get('suspected_root_cause')}")
-        print(f"  Status: {output.get('status')}")
-        for name, payload in result["scores"].items():
-            print(f"  {name}: {payload['score']:.2f}")
 
-    avg = sum(
-        score["score"]
-        for result in results
-        for score in result["scores"].values()
-    ) / max(len(results) * 4, 1)
-    print(f"\nAverage score: {avg:.2f}")
+    print("\nOpsRoom.ai — Weave Evaluations\n" + "=" * 32)
     if weave_url:
-        print(f"\nInspect eval traces in Weave:\n  {weave_url}")
+        print(f"Weave UI: {weave_url}")
+        print("Open Evals tab after this run to compare scorer columns across cases.")
     else:
-        print("\nWeave cloud tracing unavailable — set WANDB_API_KEY in .env")
+        print("Weave cloud unavailable — set WANDB_API_KEY in .env for Evals dashboard.")
+
+    results = asyncio.run(
+        run_all_evaluations(
+            incident_dataset_path=Path(args.incident_dataset),
+            copilot_dataset_path=Path(args.copilot_dataset),
+            run_incident=args.suite in {"all", "incident"},
+            run_copilot=args.suite in {"all", "copilot"},
+            seed_before_each_case=args.seed,
+            evaluation_name=args.evaluation_name,
+        )
+    )
+
+    if "incident" in results:
+        _print_summary("Incident agent evaluation", results["incident"])
+    if "copilot" in results:
+        _print_summary("Copilot routing evaluation", results["copilot"])
+
+    if weave_url:
+        print(f"\nInspect results in Weave:\n  {weave_url}")
 
 
 if __name__ == "__main__":

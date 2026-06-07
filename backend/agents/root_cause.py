@@ -17,6 +17,7 @@ def root_cause_agent(state: IncidentGraphState) -> dict:
     result = complete_json(
         "You are an incident root cause analyst. Use ONLY the supplied evidence. "
         "Return JSON with suspected_root_cause (one concise sentence) and confidence (0-1). "
+        "Your confidence should stay close to derived_hypotheses[0].confidence. "
         "Do not invent services or deploys not present in the evidence.",
         json.dumps(
             {
@@ -33,9 +34,15 @@ def root_cause_agent(state: IncidentGraphState) -> dict:
         ),
         {"suspected_root_cause": derived_root, "confidence": derived_confidence},
     )
+    llm_confidence = float(result.get("confidence", derived_confidence))
+    # Keep root cause confidence aligned with the top ranked hypothesis.
+    if abs(llm_confidence - derived_confidence) > 0.12:
+        aligned_confidence = derived_confidence
+    else:
+        aligned_confidence = round((llm_confidence + derived_confidence) / 2, 2)
     changes = {
         "suspected_root_cause": result.get("suspected_root_cause", derived_root),
-        "confidence": float(result.get("confidence", derived_confidence)),
+        "confidence": aligned_confidence,
         "hypotheses": derived_hypotheses,
     }
     update_incident(incident_id, changes)

@@ -3,9 +3,24 @@
     "id": "kafka-lag-001",
     "incident_id": "inc-kafka-lag-001",
     "prompt": "Analyze the Kafka lag incident with schema deserialization errors after checkout-consumer v2 deploy.",
-    "expected_root_cause": "checkout-consumer v2 introduced a schema/deserialization compatibility bug, causing Kafka messages to fail processing and consumer lag to grow.",
-    "expected_mitigation": "Rollback checkout-consumer v2, pause risky producer rollout if needed, and verify schema compatibility before redeploy.",
+    "expected_root_cause_keywords": ["schema", "deserial", "checkout-consumer", "v2", "lag"],
     "expected_evidence_keywords": ["deserial", "schema", "checkout-consumer", "v2", "lag"],
-    "requires_human_approval": true
+    "expected_top_hypothesis_keywords": ["deserial", "schema", "deploy", "avro"],
+    "expected_log_patterns": ["schema_deserialization_error"],
+    "requires_human_approval": true,
+    "requires_deploy_signal": true,
+    "max_confidence_gap": 0.15
+  },
+  {
+    "id": "redis-memory-001",
+    "incident_id": "inc-redis-memory-001",
+    "prompt": "Analyze Redis memory pressure on session-cache with evictions and elevated API latency.",
+    "expected_root_cause_keywords": ["redis", "memory", "evict", "session-cache"],
+    "expected_evidence_keywords": ["redis", "memory", "evict", "oom", "maxmemory"],
+    "expected_top_hypothesis_keywords": ["redis", "memory", "evict", "oom"],
+    "expected_log_patterns": ["redis_memory_pressure"],
+    "requires_human_approval": false,
+    "requires_deploy_signal": false,
+    "max_confidence_gap": 0.15
   }
 ]

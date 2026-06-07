@@ -1,0 +1,34 @@
+[
+  {
+    "id": "hypothesis-ranking",
+    "question": "Show hypothesis ranking",
+    "expected_panels": ["hypotheses"]
+  },
+  {
+    "id": "metrics-lag-error",
+    "question": "Show live metrics for consumer lag and error rate",
+    "expected_panels": ["metrics"],
+    "expected_metric_filter": ["kafka_consumer_lag", "error_rate"]
+  },
+  {
+    "id": "smoking-gun",
+    "question": "What's the smoking gun?",
+    "expected_panels": ["smokinggun"]
+  },
+  {
+    "id": "schema-proof",
+    "question": "Show schema deserialization proof",
+    "expected_panels": ["smokinggun"]
+  },
+  {
+    "id": "redis-memory-metric",
+    "question": "Chart redis_used_memory_pct",
+    "expected_panels": ["metrics"],
+    "expected_metric_filter": ["redis_used_memory_pct"]
+  },
+  {
+    "id": "dashboard-all",
+    "question": "Open a custom dashboard with metrics and hypotheses",
+    "expected_panels": ["metrics", "hypotheses"]
+  }
+]
